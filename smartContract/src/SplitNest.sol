@@ -31,10 +31,12 @@ contract SplitNest {
         uint256 totalAmount;
         uint256 paidAmount;
         address creator;
-        mapping(address => uint256) paidShares;
-        address[] payers;         // NEW: list of payers
+        mapping(address => uint256) paidShares;   // how much each member has paid
+        uint256 memberShare;                      // fixed share for each member
+        address[] payers;
         bool reimbursed;
     }
+
 
     ////////////////////////////Events//////////////////////////////////
 
@@ -169,7 +171,6 @@ contract SplitNest {
 
     }
 
-
     // Transfer creator
     function transferCreator(uint256 _groupId, address _newCreator) external {
         Group storage group = groups[_groupId];
@@ -201,18 +202,22 @@ contract SplitNest {
 
     function CreateBill(uint256 _groupId, string memory _description, uint256 _billAmount) external {
         Group storage group = groups[_groupId];
+        require(group.members.length > 0, "No members in group");
 
         group.billCount++;
         uint256 billId = group.billCount;
 
         Bill storage bill = group.bills[billId];
-        
         bill.totalAmount = _billAmount;
         bill.description = _description;
         bill.creator = msg.sender;
 
+        // Divide equally
+        bill.memberShare = _billAmount / group.members.length;
+
         emit BillCreated(_groupId, billId, _billAmount, msg.sender);
     }
+
 
     function payBillShare(uint256 _billCount, uint256 _groupId) payable external {
         Group storage group = groups[_groupId];
@@ -223,40 +228,17 @@ contract SplitNest {
         require(bill.totalAmount > 0, "Bill does not exist");
 
         // Track if sender is a member (Yul loop)
-        bool isMember = false;
+        bool isMember = isMemberOf(_groupId,msg.sender);
 
-        assembly {
-            mstore(0x0, _groupId)
-            mstore(0x20, groups.slot)
-            let groupSlot := keccak256(0x0, 0x40)
-
-            // members is the 3rd variable in Group struct => offset = 2
-            let membersSlot := add(groupSlot, 2)
-
-            // load length
-            let len := sload(membersSlot)
-
-            // compute start of data
-            mstore(0x0, membersSlot)
-            let dataSlot := keccak256(0x0, 0x20)
-
-            for { let i := 0 } lt(i, len) { i := add(i, 1) } {
-            let member := sload(add(dataSlot, i))
-                if eq(member, caller()) {
-                    isMember := 1
-                    break
-                }
+        if(isMember){
+            // Update paidShares mapping
+            if (bill.paidShares[msg.sender] == 0) {
+                // First time payer → track them
+                bill.payers.push(msg.sender);
             }
+            bill.paidShares[msg.sender] += msg.value;
         }
 
-        require(isMember, "You are not a member of this group");
-
-        // Update paidShares mapping
-        if (bill.paidShares[msg.sender] == 0) {
-            // First time payer → track them
-            bill.payers.push(msg.sender);
-        }
-        bill.paidShares[msg.sender] += msg.value;
         bill.paidAmount += msg.value;
 
         emit BillPaid(_groupId, _billCount, uint160(msg.sender), msg.value);
@@ -281,7 +263,7 @@ contract SplitNest {
 
 
      // Check if an address (or msg.sender) is a member of a group using assembly loop
-    function isMemberOf(uint256 _groupId, address _addr) public view returns (bool) {
+    function isMemberOf(uint256 _groupId, address _addr) internal view returns (bool) {
         bool isMember = false;
         assembly {
             mstore(0x0, _groupId)
@@ -305,6 +287,28 @@ contract SplitNest {
         }
         return isMember;
     }
+
+    function getOutstandingAmount(uint256 _groupId, uint256 _billId, address _member) 
+        external 
+        view 
+        returns (uint256 outstanding) 
+    {
+        Group storage group = groups[_groupId];
+        Bill storage bill = group.bills[_billId];
+
+        require(bill.totalAmount > 0, "Bill does not exist");
+        require(isMemberOf(_groupId, _member), "Not a member");
+
+        uint256 expected = bill.memberShare;
+        uint256 paid = bill.paidShares[_member];
+
+        if (paid >= expected) {
+        return 0; // fully paid
+        } else {
+            return expected - paid;
+        }
+    }
+
 
     function getAllGoals(uint256 _groupId)
         external
