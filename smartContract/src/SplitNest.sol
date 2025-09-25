@@ -31,11 +31,13 @@ contract SplitNest {
         uint256 totalAmount;
         uint256 paidAmount;
         address creator;
-        mapping(address => uint256) paidShares;   // how much each member has paid
-        uint256 memberShare;                      // fixed share for each member
+        mapping(address => uint256) paidShares;
+        uint256 memberShare;   
+        uint256 remainder;     // leftover wei after equal split
         address[] payers;
         bool reimbursed;
     }
+
 
 
     ////////////////////////////Events//////////////////////////////////
@@ -214,6 +216,7 @@ contract SplitNest {
 
         // Divide equally
         bill.memberShare = _billAmount / group.members.length;
+        bill.remainder = _billAmount %  group.members.length;
 
         emit BillCreated(_groupId, billId, _billAmount, msg.sender);
     }
