@@ -29,25 +29,31 @@ function HowItWorks() {
         }
     ]
   return (
-    <div className=' max-w-7xl m-auto px-4'>
-      <div className='text-center md:my-20 my-10 '>
+    <section id='How-it-works' className='pt-25 pb-10 max-w-7xl m-auto px-4'>
+      <div className='text-center pt-10 pb-10 '>
         <h1 className='md:text-4xl  text-3xl font-bold'>How it works</h1>
         <p className='text-gray-700 text-xl mt-3'>How it works in 3 steps</p>
       </div>
         <div className='grid lg:grid-cols-3 md:grid-cols-2 grid-cols-1 gap-8 md:mb-30 mb-10'>
             {
-                Steps.map((step)=>(
-                    <div className={`${step.color} p-8 rounded-2xl`}>
-                        <div className={`${step.imageColor} inline-block p-3 rounded-2xl`}>
-                            <step.image color='white' size={30}/>
+                Steps.map((step, index)=>(
+                    <div className=''>
+                        <div className={`relative top-5 right-1  w-8 h-8 bg-blue-500 rounded-full flex items-center text-white font-bold justify-center z-10`}>
+                            {index + 1}
                         </div>
-                        <p className='text-xl text-black font-semibold mt-4'>{step.title}</p>
-                        <p className='text-gray-700 mt-4'>{step.step}</p>
+                        <div className={`${step.color} p-8 rounded-2xl h-full hover:scale-105 hover:brightness-95 transition duration-200 hover:shadow-2xl `}>
+                            <div className={`${step.imageColor} inline-block p-3 rounded-2xl`}>
+                                <step.image color='white' size={30}/>
+                            </div>
+                            <p className='text-xl text-black font-semibold mt-4'>{step.title}</p>
+                            <p className='text-gray-700 mt-4'>{step.step}</p>
+                        </div>
                     </div>
+                    
                 ))
             }
         </div>
-    </div>
+    </section>
   )
 }
 

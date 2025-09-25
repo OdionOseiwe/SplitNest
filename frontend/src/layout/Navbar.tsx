@@ -11,11 +11,11 @@ function Navbar() {
                 <HandCoins color='purple'/>
             </div>
             <div className='flex space-x-8 text-gray-700'>
-              <p>Home</p>
-              <p>About</p>
-              <p>How is works</p>
-              <p>Features</p>
-              <p>Testimonials</p>
+              <a href='#Hero'>Home</a>
+              <a href='#'>About</a>
+              <a href='#How-it-works'>How is works</a>
+              <a href='#Features'>Features</a>
+              <a href='#what-users-say'>Testimonials</a>
             </div>
         </div>
      

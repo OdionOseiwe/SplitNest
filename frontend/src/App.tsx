@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import Hero from './pages/Hero'
 import Features from './pages/Features'
 import UserSay from './pages/UserSay'

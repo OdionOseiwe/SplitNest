@@ -4,9 +4,9 @@ import HeroSection from '../components/HeroSection'
 
 export default function Hero() {
   return (
-    <div className=''>
+    <section id='Hero' className='min-h-screen '>
       <Navbar/>
       <HeroSection/>
-    </div>
+    </section>
   )
 }
