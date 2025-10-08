@@ -435,4 +435,10 @@ contract SplitNest {
         return bill.paidShares[_addr];
     }
 
+    // Helper: get basic group info (name, creator, members)
+    function getGroup(uint256 _groupId) external view returns (string memory, address, address[] memory) {
+        Group storage g = groups[_groupId];
+        return (g.name, g.creator, g.members);
+    }
+
 }
