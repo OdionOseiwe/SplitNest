@@ -1,28 +1,28 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-contract SplitNest {
+import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 
-    mapping(uint256 => Group) private groups;
-    uint256 public groupCount;
+/**
+ * @title SplitNest
+ * @notice Group savings and bill-splitting contract.
+ * @dev Uses OpenZeppelin's ReentrancyGuard for security on fund withdrawals.
+ * Each group has a creator who can manage goals and members.
+ * Members can contribute to goals and pay their shares of bills.
+ * Goals have deadlines and target amounts; funds can be withdrawn by the creator
+ * once the target is met or the deadline has passed. Bills can be created by any member,
+ * and members pay their equal shares. Bill creators can withdraw funds once fully paid.
+ */
 
-    struct Group {
-        string name;
-        address creator;
-        address[] members;
-        mapping(uint256 => Goal) goals;  // id => Goal
-        mapping(uint256 => Bill) bills;  // id => Bills 
-        uint256 goalCount;
-        uint256 billCount;
-    }
 
+contract SplitNest is ReentrancyGuard {
     struct Goal {
         string name;
         uint256 targetAmount;
         uint256 totalContributed;
         uint256 deadline;
         mapping(address => uint256) contributions;
-        address[] contributors;   // NEW: list of contributors
+        address[] contributors;
         bool withdrawn;
     }
 
@@ -32,48 +32,72 @@ contract SplitNest {
         uint256 paidAmount;
         address creator;
         mapping(address => uint256) paidShares;
-        uint256 memberShare;   
-        uint256 remainder;     // leftover wei after equal split
+        uint256 memberShare;
+        uint256 remainder;
         address[] payers;
         bool reimbursed;
     }
 
+    struct Group {
+        string name;
+        address creator;
+        address[] members;
+        mapping(address => bool) isMember;
+        mapping(uint256 => Goal) goals; // id => Goal
+        mapping(uint256 => Bill) bills; // id => Bill
+        uint256 goalCount;
+        uint256 billCount;
+    }
 
+    // groups mapping
+    mapping(uint256 => Group) private groups;
+    uint256 public groupCount;
 
-    ////////////////////////////Events//////////////////////////////////
-
+    //////////////////////////// Events //////////////////////////////////
     event GroupCreated(uint256 indexed groupId, address indexed creator);
-    event  Addmember(uint256 indexed groupId, address[] indexed member);
+    event AddMember(uint256 indexed groupId, address indexed member);
     event GoalCreated(uint256 indexed groupId, uint256 indexed goalId, uint256 indexed targetAmount);
     event ContributionMade(uint256 indexed groupId, uint256 indexed goalId, address indexed member, uint256 amount);
-    event  BillCreated(uint256 indexed groupId, uint256 indexed billId, uint256 indexed totalAmount, address creator);
-    event BillPaid(uint256 indexed groupId, uint256 indexed billId, uint256 indexed member, uint256 amount);
+    event BillCreated(uint256 indexed groupId, uint256 indexed billId, uint256 indexed totalAmount, address creator);
+    event BillPaid(uint256 indexed groupId, uint256 indexed billId, address indexed payer, uint256 amount);
     event GoalDeadlineExtended(uint256 indexed groupId, uint256 indexed goalId, uint256 indexed newDeadline);
     event CreatorTransferred(uint256 indexed groupId, address indexed oldCreator, address indexed newCreator);
 
+    /////////////////////////// Functions ////////////////////////////////
 
-    /////////////////////////// function ////////////////////////////////
-
-    // Create a new group
+    /// @notice Create a new group; caller becomes creator and initial member
     function CreateGroup(string memory _name) external {
         groupCount += 1;
         uint256 groupId = groupCount;
-        groups[groupId].name = _name;
-        groups[groupId].creator = msg.sender;
+
+        Group storage g = groups[groupId];
+        g.name = _name;
+        g.creator = msg.sender;
+        g.members.push(msg.sender);
+        g.isMember[msg.sender] = true;
 
         emit GroupCreated(groupId, msg.sender);
     }
 
-    function AddMember(uint256 _groupId, address[] memory _member) external {
-        address _creator = groups[_groupId].creator;
-        require(msg.sender == _creator, "only creator can add member");
-        for (uint i = 0; i < _member.length; i++) {
-            groups[_groupId].members.push(_member[i]);
+    /// @notice Add members to a group (only group creator)
+    function addMember(uint256 _groupId, address[] memory _members) external {
+        Group storage g = groups[_groupId];
+        require(g.creator != address(0), "group does not exist");
+        require(msg.sender == g.creator, "only creator can add member");
+
+        for (uint i = 0; i < _members.length; i++) {
+            address m = _members[i];
+            require(m != address(0), "invalid member");
+            if (!g.isMember[m]) {
+                g.members.push(m);
+                g.isMember[m] = true;
+                emit AddMember(_groupId, m);
+            }
         }
-        emit Addmember(_groupId ,_member);
     }
 
-    function LeaveGroup(uint256 _groupId) external {
+    /// @notice Leave a group; caller is removed from member list
+       function LeaveGroup(uint256 _groupId) external {
         bool found;
         assembly{
             // store the key of the mapping and slot number in memory 
@@ -115,19 +139,16 @@ contract SplitNest {
             revert("Not a member");
         }
     }
-
-    // Create a saving goal (only group creator)
+    /// @notice Create a saving goal (only group creator)
     function CreateGoal(uint256 _groupId, string memory _name, uint256 _targetAmount, uint256 _deadline) external {
-        Group storage group = groups[_groupId];
+        Group storage g = groups[_groupId];
+        require(g.creator != address(0), "group does not exist");
+        require(msg.sender == g.creator, "only creator can create goal");
 
-        address _creator = group.creator;
-        require(msg.sender == _creator, "only creator can create goal");
+        g.goalCount += 1;
+        uint256 goalId = g.goalCount;
 
-        group.goalCount += 1;
-        uint256 goalId = group.goalCount;
-
-        Goal storage goal  = group.goals[goalId];
-
+        Goal storage goal = g.goals[goalId];
         goal.deadline = _deadline;
         goal.name = _name;
         goal.targetAmount = _targetAmount;
@@ -137,14 +158,17 @@ contract SplitNest {
         emit GoalCreated(_groupId, goalId, _targetAmount);
     }
 
+    /// @notice Contribute to a goal
     function Contribute(uint256 _groupId, uint256 _goalId) payable external {
-        Group storage group = groups[_groupId];
-        Goal storage goal  = group.goals[_goalId];
+        Group storage g = groups[_groupId];
+        require(g.creator != address(0), "group does not exist");
 
+        Goal storage goal  = g.goals[_goalId];
         require(goal.targetAmount > 0, "goal does not exist");
         require(block.timestamp < goal.deadline, "goal not in session");
         require(!goal.withdrawn, "goal already withdrawn");
         require(msg.value > 0, "enter valid amount");
+        require(g.isMember[msg.sender], "only group members can contribute");
 
         if (goal.contributions[msg.sender] == 0) {
             // First time contributor → track them
@@ -153,44 +177,52 @@ contract SplitNest {
 
         goal.totalContributed += msg.value;
         goal.contributions[msg.sender] += msg.value;
-    
+
         emit ContributionMade(_groupId, _goalId, msg.sender, msg.value);
     }
 
-
+    /// @notice Extend a goal deadline (only creator)
     function extendDeadline(uint256 _groupId, uint256 _goalId, uint256 _newDeadline) external {
-        Group storage group = groups[_groupId];
-        require(msg.sender == group.creator, "Only creator can extend deadline");
+        Group storage g = groups[_groupId];
+        require(g.creator != address(0), "group does not exist");
+        require(msg.sender == g.creator, "Only creator can extend deadline");
 
-        Goal storage goal = group.goals[_goalId];
+        Goal storage goal = g.goals[_goalId];
         require(goal.deadline > 0, "Goal does not exist");
         require(!goal.withdrawn, "Goal already withdrawn");
         require(_newDeadline > goal.deadline, "New deadline must be later");
 
         goal.deadline = _newDeadline;
 
-        emit  GoalDeadlineExtended(_groupId, _goalId, _newDeadline);
-
+        emit GoalDeadlineExtended(_groupId, _goalId, _newDeadline);
     }
 
-    // Transfer creator
+    /// @notice Transfer creator role to another address
     function transferCreator(uint256 _groupId, address _newCreator) external {
-        Group storage group = groups[_groupId];
-        require(msg.sender == group.creator, "Only creator can transfer");
+        Group storage g = groups[_groupId];
+        require(g.creator != address(0), "group does not exist");
+        require(msg.sender == g.creator, "Only creator can transfer");
         require(_newCreator != address(0), "Invalid new creator");
+        require(g.isMember[_newCreator], "new creator must be a member");
 
-        address old = group.creator;
-        group.creator = _newCreator;
+        address old = g.creator;
+        g.creator = _newCreator;
 
         emit CreatorTransferred(_groupId, old, _newCreator);
     }
 
+    /// @notice Withdraw goal funds (only creator). Uses nonReentrant.
+    /// @dev Creator can withdraw if target met OR deadline passed. Consider refund logic if target not met.
+    function withdrawGoalFunds(uint256 _groupId, uint256 _goalId) external nonReentrant {
+        Group storage g = groups[_groupId];
+        require(g.creator != address(0), "group does not exist");
+        require(msg.sender == g.creator, "Only creator can withdraw");
 
-    function withdrawGoalFunds(uint256 _groupId, uint256 _goalId) external {
-        Goal storage goal = groups[_groupId].goals[_goalId];
-        require(msg.sender == groups[_groupId].creator, "Only creator can withdraw");
-        require(goal.totalContributed >= goal.targetAmount || goal.deadline < block.timestamp, "Target not met");
+        Goal storage goal = g.goals[_goalId];
+        require(goal.targetAmount > 0, "goal does not exist");
+        require(goal.totalContributed > 0, "no funds to withdraw");
         require(!goal.withdrawn, "Already withdrawn");
+        require(goal.totalContributed >= goal.targetAmount || goal.deadline < block.timestamp, "Target not met and deadline not passed");
 
         goal.withdrawn = true;
 
@@ -201,56 +233,55 @@ contract SplitNest {
         require(success, "Transfer failed");
     }
 
-
+    /// @notice Create a bill for the group (any member can create)
     function CreateBill(uint256 _groupId, string memory _description, uint256 _billAmount) external {
-        Group storage group = groups[_groupId];
-        require(group.members.length > 0, "No members in group");
+        Group storage g = groups[_groupId];
+        require(g.creator != address(0), "group does not exist");
+        require(g.isMember[msg.sender], "only members can create bills");
+        require(g.members.length > 0, "No members in group");
+        require(_billAmount > 0, "Invalid bill amount");
 
-        group.billCount++;
-        uint256 billId = group.billCount;
+        g.billCount++;
+        uint256 billId = g.billCount;
 
-        Bill storage bill = group.bills[billId];
+        Bill storage bill = g.bills[billId];
         bill.totalAmount = _billAmount;
         bill.description = _description;
         bill.creator = msg.sender;
 
         // Divide equally
-        bill.memberShare = _billAmount / group.members.length;
-        bill.remainder = _billAmount %  group.members.length;
+        bill.memberShare = _billAmount / g.members.length;
+        bill.remainder = _billAmount % g.members.length;
 
         emit BillCreated(_groupId, billId, _billAmount, msg.sender);
     }
 
-
-    function payBillShare(uint256 _billCount, uint256 _groupId) payable external {
-        Group storage group = groups[_groupId];
-        Bill storage bill = group.bills[_billCount];
-
-        // Checks
-        require(msg.value > 0, "Must send ETH");
+    /// @notice Pay toward a bill share. Caller must not be a member and sends ETH
+    function payBillShare(uint256 _billId, uint256 _groupId) payable external {
+        Group storage g = groups[_groupId];
+        require(g.creator != address(0), "group does not exist");
+        Bill storage bill = g.bills[_billId];
         require(bill.totalAmount > 0, "Bill does not exist");
+        require(msg.value > 0, "Must send ETH");
 
-        // Track if sender is a member (Yul loop)
-        bool isMember = isMemberOf(_groupId,msg.sender);
-
-        if(isMember){
-            // Update paidShares mapping
-            if (bill.paidShares[msg.sender] == 0) {
-                // First time payer → track them
-                bill.payers.push(msg.sender);
-            }
-            bill.paidShares[msg.sender] += msg.value;
+        // Update paidShares mapping
+        if (bill.paidShares[msg.sender] == 0) {
+            // First time payer → track them
+            bill.payers.push(msg.sender);
         }
-
+        bill.paidShares[msg.sender] += msg.value;
         bill.paidAmount += msg.value;
 
-        emit BillPaid(_groupId, _billCount, uint160(msg.sender), msg.value);
+        emit BillPaid(_groupId, _billId, msg.sender, msg.value);
     }
 
+    /// @notice Withdraw collected bill funds (only bill creator) once fully paid
+    function withdrawBillFunds(uint256 _groupId, uint256 _billId) external nonReentrant {
+        Group storage g = groups[_groupId];
+        require(g.creator != address(0), "group does not exist");
 
-    function withdrawBillFunds(uint256 _groupId, uint256 _billId) external {
-        Bill storage bill = groups[_groupId].bills[_billId];
-
+        Bill storage bill = g.bills[_billId];
+        require(bill.totalAmount > 0, "Bill does not exist");
         require(!bill.reimbursed, "Already reimbursed");
         require(bill.paidAmount >= bill.totalAmount, "Bill not fully paid");
         require(bill.creator == msg.sender, "Only bill creator can withdraw");
@@ -264,55 +295,34 @@ contract SplitNest {
         require(success, "Withdraw failed");
     }
 
-
-     // Check if an address (or msg.sender) is a member of a group using assembly loop
-    function isMemberOf(uint256 _groupId, address _addr) internal view returns (bool) {
-        bool isMember = false;
-        assembly {
-            mstore(0x0, _groupId)
-            mstore(0x20, groups.slot)
-            let groupSlot := keccak256(0x0, 0x40)
-
-            // members is offset 2
-            let membersSlot := add(groupSlot, 2)
-            let len := sload(membersSlot)
-
-            mstore(0x0, membersSlot)
-            let dataSlot := keccak256(0x0, 0x20)
-
-            for { let i := 0 } lt(i, len) { i := add(i, 1) } {
-                let member := sload(add(dataSlot, i))
-                if eq(member, _addr) {
-                    isMember := 1
-                    break
-                }
-            }
-        }
-        return isMember;
+    /// @notice Check if an address is a member of a group
+    function isMemberOf(uint256 _groupId, address _addr) public view returns (bool) {
+        return groups[_groupId].isMember[_addr];
     }
 
-    function getOutstandingAmount(uint256 _groupId, uint256 _billId, address _member) 
-        external 
-        view 
-        returns (uint256 outstanding) 
+    /// @notice Get outstanding amount for a group member on a bill
+    function getOutstandingAmount(uint256 _groupId, uint256 _billId, address _member)
+        external
+        view
+        returns (uint256 outstanding)
     {
         Group storage group = groups[_groupId];
         Bill storage bill = group.bills[_billId];
 
         require(bill.totalAmount > 0, "Bill does not exist");
-        require(isMemberOf(_groupId, _member), "Not a member");
+        require(group.isMember[_member], "Not a member");
 
         uint256 expected = bill.memberShare;
         uint256 paid = bill.paidShares[_member];
 
         if (paid >= expected) {
-        return 0; // fully paid
+            return 0; // fully paid
         } else {
             return expected - paid;
         }
     }
 
-
+    /// @notice Return basic info about all goals in a group
     function getAllGoals(uint256 _groupId)
         external
         view
@@ -333,8 +343,6 @@ contract SplitNest {
         deadlines = new uint256[](count);
         withdrawn = new bool[](count);
 
-        // Use standard Solidity loop here because reading nested mapping fields is straightforward.
-        // For membership loops we used inline assembly; here high-level code is safer and clearer.
         for (uint256 i = 0; i < count; i++) {
             uint256 id = i + 1;
             Goal storage g = group.goals[id];
@@ -346,6 +354,7 @@ contract SplitNest {
         }
     }
 
+    /// @notice Return basic info about all bills in a group
     function getAllBills(uint256 _groupId)
         external
         view
@@ -377,6 +386,7 @@ contract SplitNest {
         }
     }
 
+    /// @notice Get contributors and their amounts for a goal
     function getGoalContributors(uint256 _groupId, uint256 _goalId)
         external
         view
@@ -397,6 +407,7 @@ contract SplitNest {
         return (addrs, amounts);
     }
 
+    /// @notice Get bill payers and their paid amounts
     function getBillPayers(uint256 _groupId, uint256 _billId)
         external
         view
@@ -417,28 +428,26 @@ contract SplitNest {
         return (addrs, amounts);
     }
 
-
-    // Helper to get member list for a group (returns array of addresses)
+    /// @notice Get members of a group
     function getMembers(uint256 _groupId) external view returns (address[] memory) {
         return groups[_groupId].members;
     }
 
-    // Helper: read how much an address contributed to a goal
+    /// @notice Read how much an address contributed to a goal
     function getContribution(uint256 _groupId, uint256 _goalId, address _addr) external view returns (uint256) {
         Goal storage goal = groups[_groupId].goals[_goalId];
         return goal.contributions[_addr];
     }
 
-    // Helper: read how much an address paid toward a bill
+    /// @notice Read how much an address paid toward a bill
     function getPaidShare(uint256 _groupId, uint256 _billId, address _addr) external view returns (uint256) {
         Bill storage bill = groups[_groupId].bills[_billId];
         return bill.paidShares[_addr];
     }
 
-    // Helper: get basic group info (name, creator, members)
+    /// @notice Get basic group info (name, creator, members)
     function getGroup(uint256 _groupId) external view returns (string memory, address, address[] memory) {
         Group storage g = groups[_groupId];
         return (g.name, g.creator, g.members);
     }
-
 }
