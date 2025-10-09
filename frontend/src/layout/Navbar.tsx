@@ -1,9 +1,10 @@
 import React from 'react'
 import { HandCoins } from 'lucide-react';
+import {PushUniversalAccountButton} from '@pushchain/ui-kit';
 
 function Navbar() {
   return (
-    <nav className='fixed left-0 top-0 right-0 z-50 bg-white border-b border-gray-200 py-4
+    <nav className='fixed left-0 top-0 right-0 z-10 bg-white border-b border-gray-200 py-4
                     '>
         <div className='flex justify-between max-w-7xl mx-auto px-4'>
             <div className='flex items-center'>
@@ -17,6 +18,8 @@ function Navbar() {
               <a href='#Features'>Features</a>
               <a href='#what-users-say'>Testimonials</a>
             </div>
+                  <PushUniversalAccountButton />
+
         </div>
      
     </nav>

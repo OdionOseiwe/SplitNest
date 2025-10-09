@@ -18,9 +18,7 @@ contract SplitNestTest is Test {
         vm.deal(member1, 50 ether);
         vm.deal(member2, 50 ether);
         vm.deal(outsider, 20 ether);
-        vm.deal(nonCreator, 20 ether);
-
-       
+        vm.deal(nonCreator, 20 ether);       
     }
 
     function testCreateGroup() public {

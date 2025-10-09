@@ -97,7 +97,7 @@ contract SplitNest is ReentrancyGuard {
     }
 
     /// @notice Leave a group; caller is removed from member list
-       function LeaveGroup(uint256 _groupId) external {
+    function LeaveGroup(uint256 _groupId) external {
         bool found;
         assembly{
             // store the key of the mapping and slot number in memory 
